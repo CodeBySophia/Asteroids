@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Archivy a zdrojový balík grafiky (potřebné obrázky jsou v imgs/)
+*.zip
+SpaceShooterRedux/
+
+# Staré a vývojové verze
+Old/
+
+# Lokální žebříček hráčů – vzniká při hraní
+scores.csv
+
+# Systémové a editorové soubory
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
