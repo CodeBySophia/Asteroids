@@ -4,17 +4,17 @@ __pycache__/
 .venv/
 venv/
 
-# Archivy a zdrojový balík grafiky (potřebné obrázky jsou v imgs/)
+# Archives and the source graphics pack (the images needed are in imgs/)
 *.zip
 SpaceShooterRedux/
 
-# Staré a vývojové verze
+# Old and development versions
 Old/
 
-# Lokální žebříček hráčů – vzniká při hraní
+# Local leaderboard – created while playing
 scores.csv
 
-# Systémové a editorové soubory
+# System and editor files
 .DS_Store
 Thumbs.db
 desktop.ini

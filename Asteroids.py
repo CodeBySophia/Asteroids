@@ -37,14 +37,14 @@ POINTS = 100  # Basic value of points
 MAX_NAME_LENGTH = 15
 SCORES_FILE = 'scores.csv'
 
-# Hitboxy: poloměr kolize = HITBOX * průměrná polovina rozměru spritu
+# Hitboxes: collision radius = HITBOX * average half-size of the sprite
 SHIP_HITBOX = 0.75
 METEOR_HITBOX = 0.95
 BULLET_HITBOX = 0.6
 UFO_HITBOX = 0.9
 
-# Cesty k souborům se počítají od složky se skriptem,
-# takže hru lze spustit odkudkoli.
+# File paths are resolved relative to the script's folder,
+# so the game can be launched from anywhere.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -68,7 +68,7 @@ def update_background():
 
 
 def load_centered(name):
-    """Načte obrázek a nastaví jeho kotvu (anchor) doprostřed."""
+    """Load an image and set its anchor point to the center."""
     img = pyglet.image.load(asset('imgs', name))
     img.anchor_x = img.width // 2
     img.anchor_y = img.height // 2
@@ -90,8 +90,8 @@ MET_imgs = [load_centered(f'meteor{color}_big{i}.png')
 BULLET_imgs = [load_centered(f'laser{color}.png') for color in ('Blue', 'Green', 'Red')]
 
 
-# Load sounds – když se zvuk nepodaří načíst (např. chybí dekodér pro .ogg),
-# hra běží dál bez něj.
+# Load sounds – if a sound fails to load (e.g. no .ogg decoder is available),
+# the game keeps running without it.
 def load_sound(name):
     try:
         return pyglet.media.load(asset('sounds', name), streaming=False)
@@ -116,7 +116,7 @@ batch = pyglet.graphics.Batch()
 
 
 class SpaceObject:
-    hitbox = 0.8  # každý typ objektu si ho může přepsat
+    hitbox = 0.8  # each object type can override it
 
     def __init__(self, img, x, y, batch):
         self.sprite = pyglet.sprite.Sprite(img, x=x, y=y, batch=batch)
@@ -124,7 +124,7 @@ class SpaceObject:
         self.velocity_y = 0
 
     def radius(self):
-        # sprite.width a sprite.height už v sobě mají započítané měřítko (scale)
+        # sprite.width and sprite.height already include the sprite's scale
         return self.hitbox * (self.sprite.width + self.sprite.height) / 4
 
     def collides_with(self, other_obj):
@@ -144,9 +144,9 @@ class SpaceObject:
                 self.sprite.y < 0 or self.sprite.y > HEIGHT)
 
     def remove_sprite(self):
-        if self.sprite:  # Ověření existence sprite před odstraněním
+        if self.sprite:  # Make sure the sprite exists before deleting it
             self.sprite.delete()
-            self.sprite = None  # Nastavení sprite na None pro další kontroly
+            self.sprite = None  # Set sprite to None for later checks
 
 
 class Ship(SpaceObject):
@@ -207,7 +207,7 @@ class Ship(SpaceObject):
     def delete(self):
         self.alive = False  # Mark ship as inactive
         self.remove_sprite()
-        if self.thruster_sprite:  # Plamen motoru se maže spolu s lodí
+        if self.thruster_sprite:  # The thruster flame is deleted together with the ship
             self.thruster_sprite.delete()
             self.thruster_sprite = None
 
@@ -224,13 +224,13 @@ class Meteor(SpaceObject):
 
     def update(self, dt):
         self.move(dt)
-        # Kontrola, zda meteor opustil hranice okna
+        # Check whether the meteor has left the window
         if self.is_outside_window():
             self.delete()
 
     def delete(self):
         self.remove_sprite()
-        if self in meteors:  # Odstranění meteoru ze seznamu meteorů
+        if self in meteors:  # Remove the meteor from the meteor list
             meteors.remove(self)
 
 
@@ -239,7 +239,7 @@ class Bullet(SpaceObject):
     speed = BULLET_SPEED
 
     def __init__(self, img_list, x, y, rotation, batch):
-        # Vybereme náhodný obrázek z poskytnutého seznamu obrázků
+        # Pick a random image from the provided list
         super().__init__(random.choice(img_list), x, y, batch)
         self.sprite.rotation = rotation
         radians = math.radians(rotation)
@@ -248,13 +248,13 @@ class Bullet(SpaceObject):
 
     def update(self, dt):
         self.move(dt)
-        # Kontrola, zda kulka opustila okraj okna
+        # Check whether the bullet has left the window
         if self.is_outside_window():
             self.delete()
 
     def delete(self):
         self.remove_sprite()
-        if self in bullets:  # Odstranění střely ze seznamu střel
+        if self in bullets:  # Remove the bullet from the bullet list
             bullets.remove(self)
 
 
@@ -264,14 +264,14 @@ class EnemyBullet(Bullet):
     def update(self, dt):
         super().update(dt)
 
-        # Kontrola kolize s lodí hráče
+        # Check for collision with the player's ship
         if self.sprite and ship1.alive and self.collides_with(ship1):
-            self.delete()  # Odstranění střely
+            self.delete()  # Remove the bullet
             lose_life()
 
     def delete(self):
         self.remove_sprite()
-        if self in enemy_bullets:  # Odstranění střely ze seznamu nepřátelských střel
+        if self in enemy_bullets:  # Remove the bullet from the enemy bullet list
             enemy_bullets.remove(self)
 
 
@@ -283,7 +283,7 @@ class Ufo(SpaceObject):
         self.sprite.scale = 0.5  # Fixed size
         self.velocity_x = vx
         self.velocity_y = vy
-        # Plánujeme přímo metodu (ne lambdu), aby ji šlo později zrušit
+        # Schedule the method itself (not a lambda) so it can be unscheduled later
         pyglet.clock.schedule_interval(self.shoot, UFO_SHOOT_INTERVAL)
 
     def update(self, dt):
@@ -307,7 +307,7 @@ class Ufo(SpaceObject):
         self.remove_sprite()
         if self in ufos:
             ufos.remove(self)
-        pyglet.clock.unschedule(self.shoot)  # Zrušení plánované střelby při zničení UFO
+        pyglet.clock.unschedule(self.shoot)  # Cancel scheduled shooting when the UFO is destroyed
 
 
 # Lists to hold game objects
@@ -336,7 +336,7 @@ next_level_score = POINTS * POINTS
 def create_ship():
     global ship1
     if ship1 is not None:
-        ship1.delete()  # Smaže starou loď i s plamenem motoru
+        ship1.delete()  # Delete the old ship along with its thruster flame
     ship1 = Ship(SHIP_img1, WIDTH // 2, HEIGHT // 2, batch)
 
 
@@ -366,8 +366,8 @@ def stop_all_scheduled_tasks():
 
 
 def clear_objects():
-    """Smaže všechny meteory, střely a UFO – včetně jejich spritů."""
-    # Procházíme kopii seznamu ([:]), protože delete() ze seznamu maže
+    """Delete all meteors, bullets and UFOs – including their sprites."""
+    # Iterate over a copy of the list ([:]) because delete() removes items from it
     for obj in meteors[:] + bullets[:] + ufos[:] + enemy_bullets[:]:
         obj.delete()
     meteors.clear()
@@ -409,12 +409,12 @@ def reset_game():
 
 
 def lose_life():
-    """Společná logika pro zásah lodi meteorem i střelou UFO."""
+    """Shared logic for the ship being hit by a meteor or a UFO bullet."""
     global lives, life_lost
 
     lives -= 1
     if life_sprites:
-        life_sprites.pop().delete()  # Odebrání jednoho indikátoru života
+        life_sprites.pop().delete()  # Remove one life indicator
     ship1.delete()
     play(SOUND_LOST_LIFE)
 
@@ -438,18 +438,18 @@ def add_points(points):
     global score, level, next_level_score, points_display_time, points_text
     score += points
 
-    # Kontrola pro zvýšení úrovně
+    # Check whether to level up
     while score >= next_level_score:
         level += 1
-        next_level_score += POINTS * POINTS  # Nastavení hranice pro další úroveň
+        next_level_score += POINTS * POINTS  # Set the threshold for the next level
 
-    # Zobrazení bodů
+    # Show the points
     points_display_time = POINTS_DISPLAY_TIME
     points_text = f'Points: {points}'
 
 
 def random_edge_position():
-    """Vrátí náhodný bod na okraji okna a úhel (ve stupních) směřující dovnitř."""
+    """Return a random point on the window edge and an angle (in degrees) pointing inward."""
     edge = random.choice(['top', 'bottom', 'left', 'right'])
     if edge == 'top':
         return random.randint(0, WIDTH), HEIGHT, random.uniform(210, 330)
@@ -480,7 +480,7 @@ def spawn_UFO(dt):
         ufos.append(Ufo(UFO_imgs, x, y, vx, vy, batch))
 
 
-# Function to calculate points based on meteor scale – menší meteor = víc bodů
+# Function to calculate points based on meteor scale – smaller meteor = more points
 def calculate_points(meteor_scale):
     if meteor_scale >= 1.0:
         return POINTS * 1
@@ -503,12 +503,12 @@ def calculate_points(meteor_scale):
 def update(dt):
     global points_display_time
 
-    if not game_started or game_over:  # Nepokračuj, pokud hra nezačala nebo pokud je konec hry
+    if not game_started or game_over:  # Do nothing if the game hasn't started or is over
         return
 
     ship1.update(dt)
 
-    # Update střel a kontrola kolizí
+    # Update bullets and check for collisions
     for bullet in bullets[:]:
         bullet.update(dt)
         if not bullet.sprite:
@@ -531,17 +531,17 @@ def update(dt):
                 bullet.delete()
                 ufo.delete()
                 play(SOUND_EXPLOSION)
-                add_points(POINTS * 10)  # Body za zničení UFO
+                add_points(POINTS * 10)  # Points for destroying a UFO
                 break
 
-    # Update meteorů a kontrola kolizí s lodí
+    # Update meteors and check for collisions with the ship
     for meteor in meteors[:]:
         meteor.update(dt)
         if ship1.alive and meteor.collides_with(ship1):
             meteor.delete()
             lose_life()
             if game_over:
-                return  # Okamžité ukončení, aby se zastavila aktualizace hry
+                return  # Stop immediately so the game stops updating
 
     # Update the UFOs and their bullets
     for ufo in ufos[:]:
@@ -552,7 +552,7 @@ def update(dt):
         if game_over:
             return
 
-    # Správa zobrazování bodů
+    # Handle the points message timer
     if points_display_time > 0:
         points_display_time -= dt
 
@@ -562,7 +562,7 @@ def export_score(player_name, score, filename=SCORES_FILE):
     path = asset(filename)
     date_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Hlavičku zapíšeme jen do nového nebo prázdného souboru
+    # Write the header only to a new or empty file
     write_header = not os.path.exists(path) or os.path.getsize(path) == 0
 
     with open(path, mode='a', newline='', encoding='utf-8') as file:
@@ -580,18 +580,18 @@ def get_top_scores(filename=SCORES_FILE, top_n=3):
                 try:
                     scores.append((row['Player Name'], int(row['Score'])))
                 except (KeyError, TypeError, ValueError):
-                    continue  # Poškozený řádek přeskočíme
+                    continue  # Skip malformed rows
     except (FileNotFoundError, UnicodeDecodeError):
         return []
 
-    # Seřadíme podle skóre v sestupném pořadí a vezmeme pouze top_n záznamů
+    # Sort by score in descending order and keep only the top_n entries
     return sorted(scores, key=lambda x: x[1], reverse=True)[:top_n]
 
 
 top_scores = get_top_scores()
 
 
-# Texty (labely) se vytvoří jen jednou a při vykreslení se jim mění text a pozice
+# Labels are created only once; drawing just updates their text and position
 def make_label(font_size, anchor_x='center', anchor_y='center'):
     return pyglet.text.Label('', font_name=FONT, font_size=font_size,
                              anchor_x=anchor_x, anchor_y=anchor_y)
@@ -655,7 +655,7 @@ def on_draw():
         if points_display_time > 0:
             draw_label(points_label, points_text, w // 2, h // 4)
 
-    # Skóre vpravo dole, úroveň vlevo nahoře, jméno hráče vpravo nahoře
+    # Score bottom right, level top left, player name top right
     draw_label(score_label, f'Score: {score}', w - 20, 20)
     draw_label(level_label, f'Difficulty: {level}', 20, h - 20)
     draw_label(player_label, f'Player: {player_name}', w - 20, h - 20)
@@ -665,7 +665,7 @@ def on_draw():
 def on_text(text):
     global player_name_input
     if waiting_for_name:
-        # Jen tisknutelné znaky (ne Enter apod.) a omezená délka jména
+        # Only printable characters (no Enter etc.) and a limited name length
         text = ''.join(ch for ch in text if ch.isprintable())
         player_name_input = (player_name_input + text)[:MAX_NAME_LENGTH]
 
@@ -694,7 +694,7 @@ def on_key_press(symbol, modifiers):
 
     if not game_started and not waiting_for_name:
         if symbol == key.UP:
-            waiting_for_name = True  # Začne čekat na jméno
+            waiting_for_name = True  # Start waiting for the player's name
     elif not game_started and waiting_for_name:
         if symbol == key.BACKSPACE:
             player_name_input = player_name_input[:-1]
@@ -704,10 +704,10 @@ def on_key_press(symbol, modifiers):
             reset_game()
     elif game_over:
         if symbol == key.ENTER:
-            reset_game()  # Úplný restart hry po "Game Over"
+            reset_game()  # Full game restart after "Game Over"
     elif life_lost:
         if symbol == key.UP:
-            restart_after_life_lost()  # Restart pouze po ztrátě života
+            restart_after_life_lost()  # Restart only after losing a life
     else:
         if symbol == key.A or symbol == key.LEFT:
             ship1.keys['left'] = True
