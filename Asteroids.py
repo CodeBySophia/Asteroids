@@ -11,18 +11,30 @@ from pyglet.window import mouse
 # Constants
 SET_WIDTH = 1400  # starting window size in pixels
 SET_HEIGHT = 700  # starting window size in pixels
-WIDTH = SET_WIDTH  # variable to work with fullscreen
-HEIGHT = SET_HEIGHT  # variable to work with fullscreen
-FULLSCREEN = False
+MIN_WIDTH = 640  # smallest allowed window size in pixels
+MIN_HEIGHT = 480
+WIDTH = SET_WIDTH  # current play area size, updated whenever the window is resized
+HEIGHT = SET_HEIGHT
 ROTATION_SPEED = 220  # degrees per second
 ACCELERATION = 300  # pixels per second squared
-DECELERATION = 200  # pixels per second squared
+DECELERATION = 100  # pixels per second squared, slows the drifting ship when not thrusting
 SLOWDOWN_RATE = 200  # rate at which the ship slows down when the down key is pressed
-MIN_METEOR_SCALE = 0.3  # minimum scale for meteors
-MAX_METEOR_SCALE = 0.7  # maximum scale for meteors
+MAX_SHIP_SPEED = 500  # pixels per second
+SHIP_INVULNERABLE_TIME = 2  # seconds of protection after the ship appears
+SHIP_BLINK_RATE = 10  # blinks per second while the ship is invulnerable
+MIN_METEOR_SCALE = 0.4  # minimum scale for meteors
+MAX_METEOR_SCALE = 1.0  # maximum scale for meteors
 MIN_METEOR_SPEED = 50  # minimum speed of meteors in pixels per second
 MAX_METEOR_SPEED = 150  # maximum speed of meteors in pixels per second
-METEOR_SPAWN_INTERVAL = 1  # interval in seconds for new meteors to appear
+METEOR_SPLIT_SCALE = 0.5  # meteors at least this big break into two pieces when hit
+METEOR_SPLIT_FACTOR = 0.55  # scale of a piece relative to the original meteor
+METEOR_SPLIT_SPEEDUP = 1.3  # pieces fly faster than the original meteor
+METEOR_SPAWN_INTERVAL = 1  # seconds between new meteors at level 1 in the starting window size
+MIN_METEOR_SPAWN_INTERVAL = 0.3  # meteors never appear more often than this (before window size scaling)
+METEOR_SPAWN_LEVEL_FACTOR = 0.9  # the spawn interval is multiplied by this with each level
+METEOR_SPEED_PER_LEVEL = 0.1  # meteors get 10 % faster with each level...
+MAX_METEOR_SPEED_FACTOR = 2.5  # ...but at most 2.5 times faster
+MIN_AREA_FACTOR = 0.5  # small windows don't get fewer meteors than half the usual amount
 STARTING_LIVES = 3  # starting number of lives
 BULLET_SPEED = 700  # speed of bullets in pixels per second
 ENEMY_BULLET_SPEED = BULLET_SPEED / 4  # UFO bullets are slower
@@ -32,6 +44,7 @@ UFO_SPAWN_INTERVAL = 20  # seconds between UFO spawns
 UFO_SHOOT_INTERVAL = 4  # seconds between UFO shots
 FONT = 'arial'
 LOST_LIFE_TEXT = "LIFE LOST"
+PAUSE_KEYS = (key.P, key.ESCAPE)
 POINTS_DISPLAY_TIME = 2  # time in seconds to display the points message
 POINTS = 100  # Basic value of points
 MAX_NAME_LENGTH = 15
@@ -52,9 +65,9 @@ def asset(*parts):
     return os.path.join(BASE_DIR, *parts)
 
 
-# Window creation
-window = pyglet.window.Window(width=WIDTH, height=HEIGHT)
-window.set_fullscreen(FULLSCREEN)
+# Window creation – resizable, so it can also be maximized or resized by dragging its edge
+window = pyglet.window.Window(width=WIDTH, height=HEIGHT, resizable=True, caption='Asteroids')
+window.set_minimum_size(MIN_WIDTH, MIN_HEIGHT)
 
 # Load background image
 background_image = pyglet.image.load(asset('imgs', 'background.jpg'))
@@ -90,8 +103,7 @@ MET_imgs = [load_centered(f'meteor{color}_big{i}.png')
 BULLET_imgs = [load_centered(f'laser{color}.png') for color in ('Blue', 'Green', 'Red')]
 
 
-# Load sounds – if a sound fails to load (e.g. no .ogg decoder is available),
-# the game keeps running without it.
+# Load sounds – if a sound fails to load, the game keeps running without it.
 def load_sound(name):
     try:
         return pyglet.media.load(asset('sounds', name), streaming=False)
@@ -107,9 +119,9 @@ def play(sound):
             pass
 
 
-SOUND_LASER = load_sound('laser.ogg')
+SOUND_LASER = load_sound('laser.wav')
 SOUND_EXPLOSION = load_sound('explosion.wav')
-SOUND_LOST_LIFE = load_sound('lost_life.ogg')
+SOUND_LOST_LIFE = load_sound('lost_life.wav')
 
 # Create batch object
 batch = pyglet.graphics.Batch()
@@ -154,7 +166,7 @@ class Ship(SpaceObject):
 
     def __init__(self, img, x, y, batch):
         super().__init__(img, x, y, batch)
-        self.velocity = 0
+        self.invulnerable = SHIP_INVULNERABLE_TIME  # seconds of protection left
         self.keys = {
             'left': False,
             'right': False,
@@ -177,22 +189,31 @@ class Ship(SpaceObject):
         if self.keys['right']:
             self.sprite.rotation += ROTATION_SPEED * dt
 
-        # Handle acceleration
+        radians = math.radians(self.sprite.rotation)
+
+        # Thrust pushes the ship in the direction it is facing; without thrust
+        # the ship keeps drifting (inertia) and only slowly loses speed
+        slowdown = 0
         if self.keys['up']:
-            self.velocity += ACCELERATION * dt
+            self.velocity_x += ACCELERATION * dt * math.sin(radians)
+            self.velocity_y += ACCELERATION * dt * math.cos(radians)
             self.thruster_sprite.visible = True
         else:
-            self.velocity = max(0, self.velocity - DECELERATION * dt)
+            slowdown += DECELERATION
             self.thruster_sprite.visible = False
 
-        # Handle slowdown
+        # Handle braking
         if self.keys['down']:
-            self.velocity = max(0, self.velocity - SLOWDOWN_RATE * dt)
+            slowdown += SLOWDOWN_RATE
 
-        # Move in the direction of the current angle
-        radians = math.radians(self.sprite.rotation)
-        self.sprite.x += self.velocity * dt * math.sin(radians)
-        self.sprite.y += self.velocity * dt * math.cos(radians)
+        # Change the speed but keep the direction of the movement
+        speed = math.hypot(self.velocity_x, self.velocity_y)
+        new_speed = min(MAX_SHIP_SPEED, max(0, speed - slowdown * dt))
+        if speed > 0:
+            self.velocity_x *= new_speed / speed
+            self.velocity_y *= new_speed / speed
+
+        self.move(dt)
 
         # Wrap-around effect for ship
         self.sprite.x %= WIDTH
@@ -203,6 +224,14 @@ class Ship(SpaceObject):
         self.thruster_sprite.x = (self.sprite.x - offset * math.sin(radians)) % WIDTH
         self.thruster_sprite.y = (self.sprite.y - offset * math.cos(radians)) % HEIGHT
         self.thruster_sprite.rotation = self.sprite.rotation
+
+        # Blink while invulnerable
+        if self.invulnerable > 0:
+            self.invulnerable -= dt
+            self.sprite.visible = self.invulnerable <= 0 or int(self.invulnerable * SHIP_BLINK_RATE) % 2 == 0
+
+    def can_be_hit(self):
+        return self.alive and self.invulnerable <= 0
 
     def delete(self):
         self.alive = False  # Mark ship as inactive
@@ -215,12 +244,26 @@ class Ship(SpaceObject):
 class Meteor(SpaceObject):
     hitbox = METEOR_HITBOX
 
-    def __init__(self, img, x, y, vx, vy, batch):
+    def __init__(self, img, x, y, vx, vy, batch, scale=None):
         super().__init__(img, x, y, batch)
-        # Random meteor scale
-        self.sprite.scale = random.uniform(MIN_METEOR_SCALE, MAX_METEOR_SCALE)
+        # Random meteor scale, unless it is a piece of a bigger meteor
+        self.sprite.scale = scale or random.uniform(MIN_METEOR_SCALE, MAX_METEOR_SCALE)
         self.velocity_x = vx
         self.velocity_y = vy
+
+    def split(self):
+        """Return two smaller pieces flying apart, or nothing if the meteor is too small."""
+        if self.sprite.scale < METEOR_SPLIT_SCALE:
+            return []
+        speed = math.hypot(self.velocity_x, self.velocity_y) * METEOR_SPLIT_SPEEDUP
+        # velocity_from_angle measures the angle from the x axis, so use atan2(y, x)
+        angle = math.degrees(math.atan2(self.velocity_y, self.velocity_x))
+        pieces = []
+        for side in (-1, 1):
+            vx, vy = velocity_from_angle(speed, angle + side * random.uniform(20, 60))
+            pieces.append(Meteor(self.sprite.image, self.sprite.x, self.sprite.y, vx, vy, batch,
+                                 scale=self.sprite.scale * METEOR_SPLIT_FACTOR))
+        return pieces
 
     def update(self, dt):
         self.move(dt)
@@ -265,7 +308,7 @@ class EnemyBullet(Bullet):
         super().update(dt)
 
         # Check for collision with the player's ship
-        if self.sprite and ship1.alive and self.collides_with(ship1):
+        if self.sprite and ship1.can_be_hit() and self.collides_with(ship1):
             self.delete()  # Remove the bullet
             lose_life()
 
@@ -294,7 +337,7 @@ class Ufo(SpaceObject):
 
     def shoot(self, dt=None):
         # Shoot only if the player's ship is alive and UFO still exists
-        if ship1.alive and self.sprite:
+        if ship1.alive and self.sprite and not paused:
             # Calculate the angle between the UFO and the player's ship
             dx = ship1.sprite.x - self.sprite.x
             dy = ship1.sprite.y - self.sprite.y
@@ -326,6 +369,7 @@ waiting_for_name = False
 game_over = False
 life_lost = False
 game_started = False  # Track if the game has started
+paused = False
 score = 0  # Variable to track the player's score
 points_display_time = 0  # Time remaining to display points message
 points_text = ''  # Text of the points message
@@ -354,7 +398,7 @@ def create_life_sprites():
 # Run scheduled tasks
 def game_scheduled_tasks():
     pyglet.clock.schedule_interval(update, 1 / 30)  # 30 times per second
-    pyglet.clock.schedule_interval(spawn_meteor, METEOR_SPAWN_INTERVAL)
+    schedule_next_meteor()
     pyglet.clock.schedule_interval(spawn_UFO, UFO_SPAWN_INTERVAL)
 
 
@@ -388,7 +432,7 @@ def restart_after_life_lost():
 
 
 def reset_game():
-    global game_over, life_lost, game_started, points_display_time, score, lives, level, next_level_score
+    global game_over, life_lost, game_started, paused, points_display_time, score, lives, level, next_level_score
 
     stop_all_scheduled_tasks()
     clear_objects()
@@ -398,6 +442,7 @@ def reset_game():
     # Reset game state variables
     game_over = False
     life_lost = False
+    paused = False
     points_display_time = 0
     score = 0
     lives = STARTING_LIVES
@@ -465,45 +510,47 @@ def velocity_from_angle(speed, angle):
     return speed * math.cos(angle_rad), speed * math.sin(angle_rad)
 
 
+def meteor_spawn_interval():
+    """Meteors come more often with higher levels and in bigger windows."""
+    interval = max(MIN_METEOR_SPAWN_INTERVAL, METEOR_SPAWN_INTERVAL * METEOR_SPAWN_LEVEL_FACTOR ** (level - 1))
+    area_factor = (WIDTH * HEIGHT) / (SET_WIDTH * SET_HEIGHT)
+    return interval / max(MIN_AREA_FACTOR, area_factor)
+
+
+def meteor_speed_factor():
+    return min(MAX_METEOR_SPEED_FACTOR, 1 + METEOR_SPEED_PER_LEVEL * (level - 1))
+
+
+def schedule_next_meteor():
+    # The interval changes during the game, so each meteor schedules the next one
+    pyglet.clock.schedule_once(spawn_meteor, meteor_spawn_interval())
+
+
 def spawn_meteor(dt):
-    if game_started and not game_over:
+    if game_started and not game_over and not paused:
         x, y, angle = random_edge_position()
-        speed = random.uniform(MIN_METEOR_SPEED, MAX_METEOR_SPEED)
+        speed = random.uniform(MIN_METEOR_SPEED, MAX_METEOR_SPEED) * meteor_speed_factor()
         vx, vy = velocity_from_angle(speed, angle)
         meteors.append(Meteor(random.choice(MET_imgs), x, y, vx, vy, batch))
+    schedule_next_meteor()
 
 
 def spawn_UFO(dt):
-    if game_started and not game_over and level >= UFO_LEVEL:
+    if game_started and not game_over and not paused and level >= UFO_LEVEL:
         x, y, angle = random_edge_position()
         vx, vy = velocity_from_angle(UFO_SPEED, angle)
         ufos.append(Ufo(UFO_imgs, x, y, vx, vy, batch))
 
 
-# Function to calculate points based on meteor scale – smaller meteor = more points
+# Smaller meteor = more points (scale 1.0 gives 200, scale 0.3 about 670), rounded to tens
 def calculate_points(meteor_scale):
-    if meteor_scale >= 1.0:
-        return POINTS * 1
-    elif meteor_scale >= 0.9:
-        return POINTS * 2
-    elif meteor_scale >= 0.8:
-        return POINTS * 3
-    elif meteor_scale >= 0.7:
-        return POINTS * 4
-    elif meteor_scale >= 0.6:
-        return POINTS * 5
-    elif meteor_scale >= 0.5:
-        return POINTS * 6
-    elif meteor_scale >= 0.4:
-        return POINTS * 7
-    else:
-        return POINTS * 8
+    return int(round(POINTS * 2 / meteor_scale, -1))
 
 
 def update(dt):
     global points_display_time
 
-    if not game_started or game_over:  # Do nothing if the game hasn't started or is over
+    if not game_started or game_over or paused:  # Do nothing if the game isn't running
         return
 
     ship1.update(dt)
@@ -517,6 +564,7 @@ def update(dt):
         for meteor in meteors[:]:
             if bullet.collides_with(meteor):
                 points = calculate_points(meteor.sprite.scale)
+                meteors.extend(meteor.split())
                 bullet.delete()
                 meteor.delete()
                 play(SOUND_EXPLOSION)
@@ -537,7 +585,7 @@ def update(dt):
     # Update meteors and check for collisions with the ship
     for meteor in meteors[:]:
         meteor.update(dt)
-        if ship1.alive and meteor.collides_with(ship1):
+        if ship1.can_be_hit() and meteor.collides_with(ship1):
             meteor.delete()
             lose_life()
             if game_over:
@@ -618,6 +666,8 @@ continue_label = make_label(20)
 game_over_label = make_label(48)
 restart_label = make_label(20)
 points_label = make_label(24)
+paused_label = make_label(48)
+unpause_label = make_label(20)
 score_label = make_label(24, anchor_x='right', anchor_y='bottom')
 level_label = make_label(24, anchor_x='left', anchor_y='top')
 player_label = make_label(24, anchor_x='right', anchor_y='top')
@@ -654,6 +704,9 @@ def on_draw():
             draw_label(continue_label, 'press UP to continue', w // 2, h // 2 - 80)
         if points_display_time > 0:
             draw_label(points_label, points_text, w // 2, h // 4)
+        if paused:
+            draw_label(paused_label, 'PAUSED', w // 2, h // 2)
+            draw_label(unpause_label, 'press P or ESC to continue', w // 2, h // 2 - 80)
 
     # Score bottom right, level top left, player name top right
     draw_label(score_label, f'Score: {score}', w - 20, 20)
@@ -671,26 +724,20 @@ def on_text(text):
 
 
 def shoot():
-    if game_started and not game_over and not life_lost and ship1.alive:
+    if game_started and not game_over and not life_lost and not paused and ship1.alive:
         bullets.append(Bullet(BULLET_imgs, ship1.sprite.x, ship1.sprite.y, ship1.sprite.rotation, batch))
         play(SOUND_LASER)
 
 
 @window.event
 def on_key_press(symbol, modifiers):
-    global game_started, waiting_for_name, player_name, player_name_input, WIDTH, HEIGHT, FULLSCREEN
+    global game_started, waiting_for_name, player_name, player_name_input, paused
 
+    # The new size is picked up in on_resize
     if symbol == key.F11:
-        FULLSCREEN = True
-        window.set_fullscreen(FULLSCREEN)
-        WIDTH, HEIGHT = window.get_size()
-
-    if symbol == key.F10:
-        FULLSCREEN = False
-        window.set_fullscreen(FULLSCREEN)
-        WIDTH = SET_WIDTH
-        HEIGHT = SET_HEIGHT
-        window.set_size(WIDTH, HEIGHT)
+        window.set_fullscreen(not window.fullscreen)  # toggle fullscreen
+    elif symbol == key.F10 and window.fullscreen:
+        window.set_fullscreen(False)
 
     if not game_started and not waiting_for_name:
         if symbol == key.UP:
@@ -705,6 +752,11 @@ def on_key_press(symbol, modifiers):
     elif game_over:
         if symbol == key.ENTER:
             reset_game()  # Full game restart after "Game Over"
+    elif symbol in PAUSE_KEYS:
+        paused = not paused
+        return pyglet.event.EVENT_HANDLED  # Stop ESC from closing the window
+    elif paused:
+        pass  # Ship controls don't work while paused
     elif life_lost:
         if symbol == key.UP:
             restart_after_life_lost()  # Restart only after losing a life
@@ -741,7 +793,18 @@ def on_key_release(symbol, modifiers):
 
 
 @window.event
+def on_deactivate():
+    # Pause automatically when the player switches to another window
+    global paused
+    if game_started and not game_over:
+        paused = True
+
+
+@window.event
 def on_resize(width, height):
+    global WIDTH, HEIGHT
+    # Fullscreen, maximize and dragging the window edge all end up here
+    WIDTH, HEIGHT = width, height
     update_background()
 
 
